@@ -158,7 +158,7 @@ function entityOrFail(payload, apiName) {
 }
 
 async function login(phone, password) {
-	const body = { phone, smsCode: password };
+	const body = { phone, password };
 	const payload = await requestJson('POST', `${API_BASE}/web/auth/login`, { body });
 	const entity = entityOrFail(payload, '测试登录');
 	if (!entity.accessToken) {
