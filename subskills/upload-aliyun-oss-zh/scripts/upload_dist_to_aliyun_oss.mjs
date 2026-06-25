@@ -200,6 +200,7 @@ async function uploadForm(entity, filePath, contentType) {
 	form.set('Signature', entity.signature);
 	form.set('success_action_status', '200');
 	form.set('Content-Type', entity.contentType || contentType);
+	form.set('x-oss-object-acl', 'public-read');
 	form.set('file', new Blob([bytes], { type: contentType }), basename(filePath));
 
 	let response;
@@ -212,6 +213,47 @@ async function uploadForm(entity, filePath, contentType) {
 	const raw = await response.text();
 	if (!response.ok) {
 		fail(`OSS 上传失败 HTTP ${response.status}：${entity.objectKey}\n${raw}`);
+	}
+}
+
+function stripUrlSignature(urlValue) {
+	if (!urlValue) {
+		return null;
+	}
+	try {
+		const url = new URL(String(urlValue));
+		url.search = '';
+		url.hash = '';
+		return url.toString();
+	} catch {
+		const cleaned = String(urlValue).split('?')[0].split('#')[0].trim();
+		return cleaned || null;
+	}
+}
+
+function encodeObjectKey(objectKey) {
+	return String(objectKey)
+		.split('/')
+		.map((part) => encodeURIComponent(part))
+		.join('/');
+}
+
+function resolvePublicReadUrl(entity) {
+	const publicUrl = stripUrlSignature(entity.publicUrl);
+	if (publicUrl) {
+		return publicUrl;
+	}
+	if (!entity.host || !entity.objectKey) {
+		return null;
+	}
+	try {
+		const base = String(entity.host).endsWith('/') ? String(entity.host) : `${entity.host}/`;
+		const url = new URL(encodeObjectKey(entity.objectKey), base);
+		url.search = '';
+		url.hash = '';
+		return url.toString();
+	} catch {
+		return null;
 	}
 }
 
@@ -318,8 +360,51 @@ async function loadManifest(projectRoot) {
 	if (!Array.isArray(manifest.props) || manifest.props.length === 0) {
 		fail('src/manifest.json 的 props 必须是非空数组');
 	}
+	validateManifestPropsForPlatform(manifest.props);
 
 	return manifest;
+}
+
+const DISALLOWED_PLATFORM_PROP_NAMES = new Set([
+	'className',
+	'style',
+	'open',
+	'collapsed',
+	'onOpenChange',
+	'onCollapsedChange',
+]);
+
+function validateManifestPropsForPlatform(props) {
+	const errors = [];
+	const missingDefaults = [];
+	const disallowed = [];
+
+	for (const prop of props) {
+		if (!prop || typeof prop !== 'object' || Array.isArray(prop)) {
+			fail(`src/manifest.json 的 props 每一项都必须是对象：${JSON.stringify(prop)}`);
+		}
+		const name = typeof prop.name === 'string' ? prop.name.trim() : '';
+		if (!name) {
+			fail(`src/manifest.json 的 props 每一项都必须有非空 name：${JSON.stringify(prop)}`);
+		}
+		if (!Object.prototype.hasOwnProperty.call(prop, 'default')) {
+			missingDefaults.push(name);
+		}
+		const type = typeof prop.type === 'string' ? prop.type : '';
+		if (DISALLOWED_PLATFORM_PROP_NAMES.has(name) || /^on[A-Z]/.test(name) || /\b=>\b|\bfunction\b/.test(type)) {
+			disallowed.push(name);
+		}
+	}
+
+	if (missingDefaults.length > 0) {
+		errors.push(`src/manifest.json 的 props 缺少 default 字段：${missingDefaults.join(', ')}。请显式提供默认值；数组或对象默认值可写结构化值，上传时会转为 JSON 字符串。`);
+	}
+	if (disallowed.length > 0) {
+		errors.push(`src/manifest.json 的 props 包含不应发布到平台的运行控制/回调字段：${disallowed.join(', ')}。请从 manifest.props 移除，仅保留业务可配置字段。`);
+	}
+	if (errors.length > 0) {
+		fail(errors.join('\n'));
+	}
 }
 
 function buildCreatePayload(manifest, sourceUrl) {
@@ -327,7 +412,7 @@ function buildCreatePayload(manifest, sourceUrl) {
 		name: manifest.name,
 		version: manifest.version,
 		description: manifest.description,
-		props: manifest.props,
+		props: normalizeManifestPropsForPlatform(manifest.props),
 		source: sourceUrl,
 	};
 
@@ -338,6 +423,33 @@ function buildCreatePayload(manifest, sourceUrl) {
 	}
 
 	return payload;
+}
+
+function isJsonObject(value) {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+export function normalizeManifestPropsForPlatform(props) {
+	return normalizeDefaultValuesForPlatform(props, 'props');
+}
+
+function normalizeDefaultValuesForPlatform(value, path) {
+	if (Array.isArray(value)) {
+		return value.map((item, index) => normalizeDefaultValuesForPlatform(item, `${path}[${index}]`));
+	}
+	if (!isJsonObject(value)) {
+		return value;
+	}
+
+	const normalized = {};
+	for (const [key, childValue] of Object.entries(value)) {
+		if (key === 'default' && (Array.isArray(childValue) || isJsonObject(childValue))) {
+			normalized[key] = JSON.stringify(childValue);
+		} else {
+			normalized[key] = normalizeDefaultValuesForPlatform(childValue, `${path}.${key}`);
+		}
+	}
+	return normalized;
 }
 
 export function validateManifestPackageCompatibility(manifest, packageInfo) {
@@ -467,12 +579,16 @@ async function main() {
 		const contentType = guessContentType(filePath);
 		const signed = await presign(token, prefix, rel, contentType, args.expiresInSeconds);
 		await uploadForm(signed, filePath, contentType);
+		const publicUrl = resolvePublicReadUrl(signed);
+		if (!publicUrl) {
+			fail(`上传成功，但无法生成不带签名的公网地址：${signed.objectKey}`);
+		}
 		const size = (await stat(filePath)).size;
 		totalSize += size;
 		uploaded.push({
 			relativePath: rel,
 			objectKey: signed.objectKey,
-			publicUrl: signed.publicUrl,
+			publicUrl,
 			contentType: signed.contentType || contentType,
 			size,
 		});
@@ -489,10 +605,6 @@ async function main() {
 		sourceHash: await hashFiles(files, distDir),
 		files: uploaded,
 	};
-
-	if (!entry.publicUrl) {
-		fail('上传成功，但 presign 返回缺少入口文件 publicUrl，无法作为新增组件接口的 source');
-	}
 
 	const createPayload = buildCreatePayload(manifest, entry.publicUrl);
 	const componentRecord = await createDeliverableH5Component(token, createPayload);
