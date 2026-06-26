@@ -23,6 +23,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Check package version matches tag
+        id: version
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
@@ -30,8 +31,26 @@ jobs:
             echo "Tag version v$TAG_VERSION does not match package.json version $PACKAGE_VERSION"
             exit 1
           fi
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check npm version existence
+        id: npm_version
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PACKAGE_SPEC="${{ steps.version.outputs.package_name }}@${{ steps.version.outputs.package_version }}"
+          if npm view "${PACKAGE_SPEC}" version >/dev/null 2>&1; then
+            echo "${PACKAGE_SPEC} already exists on npm. Skipping publish."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "${PACKAGE_SPEC} does not exist on npm. Publishing is required."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Syntax check
+        if: steps.npm_version.outputs.exists == 'false'
         run: |
           node --check bin/install.mjs
           node --check scripts/check_component_name_exists.mjs
@@ -40,9 +59,11 @@ jobs:
           node --check subskills/upload-aliyun-oss-zh/scripts/upload_dist_to_aliyun_oss.mjs
 
       - name: Preview package contents
+        if: steps.npm_version.outputs.exists == 'false'
         run: npm pack --dry-run
 
       - name: Publish
+        if: steps.npm_version.outputs.exists == 'false'
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

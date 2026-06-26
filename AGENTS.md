@@ -63,6 +63,8 @@ The publish workflow is:
 
 It runs on `v*` tag pushes, checks syntax, previews package contents with `npm pack --dry-run`, and publishes with `npm publish`.
 
+The publish workflow is idempotent for already-published versions. Before publishing, it checks whether `package@version` already exists on npm. If it exists, the workflow skips syntax check, package preview, and publish, then exits successfully. This prevents a later push of an already published tag, such as `v1.0.0`, from failing only because npm versions are immutable.
+
 Required GitHub secret:
 
 ```text
