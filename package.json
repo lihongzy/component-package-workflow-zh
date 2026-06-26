@@ -4,7 +4,7 @@
   "description": "Codex skill for Wucaishi component package workflow and HTML-to-React generation.",
   "type": "module",
   "bin": {
-    "wucaishi-generative-react-skill": "./bin/install.mjs"
+    "wucaishi-generative-react-skill": "bin/install.mjs"
   },
   "files": [
     "bin",
