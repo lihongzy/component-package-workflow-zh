@@ -1,6 +1,6 @@
 {
   "name": "wucaishi-generative-react-skill",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Codex skill for Wucaishi component package workflow and HTML-to-React generation.",
   "type": "module",
   "bin": {
