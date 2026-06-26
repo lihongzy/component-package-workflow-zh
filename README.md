@@ -49,3 +49,23 @@ npm publish
 ```
 
 Before publishing, inspect the package contents and make sure no local credentials, tokens, or machine-specific files are included.
+
+## GitHub Actions Release
+
+Add an npm automation token to the GitHub repository secrets:
+
+```text
+NPM_TOKEN
+```
+
+The token must have permission to publish this package. If npm requires 2FA for publishing, use a granular access token that can publish the package and bypass 2FA.
+
+Then bump `package.json` version and push a matching tag:
+
+```bash
+npm version patch
+git push
+git push origin v0.1.1
+```
+
+The workflow publishes only when the tag version matches `package.json` version.

@@ -1,0 +1,87 @@
+name: Revoke npm package version on tag delete
+
+on:
+  delete:
+
+permissions:
+  contents: read
+
+jobs:
+  revoke:
+    if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Revoke npm version
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_NAME: wucaishi-generative-react-skill
+          TAG_NAME: ${{ github.event.ref }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          PACKAGE_SPEC="${PACKAGE_NAME}@${VERSION}"
+          MESSAGE="This version was revoked by deleting git tag ${TAG_NAME}."
+
+          echo "Revoking ${PACKAGE_SPEC}"
+
+          rollback_latest() {
+            echo "Checking latest dist-tag rollback target..."
+            PREVIOUS_VERSION="$(npm view "${PACKAGE_NAME}" versions --json | node -e '
+              const fs = require("node:fs");
+              const revokedVersion = process.env.VERSION;
+
+              function parseVersion(value) {
+                const match = String(value).match(/^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+                return match ? match.slice(1, 4).map(Number) : null;
+              }
+
+              function compareVersions(a, b) {
+                const parsedA = parseVersion(a);
+                const parsedB = parseVersion(b);
+                if (!parsedA && !parsedB) return String(a).localeCompare(String(b));
+                if (!parsedA) return -1;
+                if (!parsedB) return 1;
+                for (let index = 0; index < 3; index += 1) {
+                  if (parsedA[index] !== parsedB[index]) {
+                    return parsedA[index] - parsedB[index];
+                  }
+                }
+                return String(a).localeCompare(String(b));
+              }
+
+              const versions = JSON.parse(fs.readFileSync(0, "utf8"));
+              const candidates = versions
+                .filter((version) => version !== revokedVersion)
+                .sort(compareVersions);
+
+              process.stdout.write(candidates.at(-1) || "");
+            ')"
+
+            if [ -n "${PREVIOUS_VERSION}" ]; then
+              echo "Setting latest dist-tag to ${PACKAGE_NAME}@${PREVIOUS_VERSION}"
+              npm dist-tag add "${PACKAGE_NAME}@${PREVIOUS_VERSION}" latest
+            else
+              echo "No previous version found. latest dist-tag was not changed."
+            fi
+          }
+
+          if npm view "${PACKAGE_SPEC}" version >/dev/null 2>&1; then
+            if npm unpublish "${PACKAGE_SPEC}"; then
+              echo "Unpublished ${PACKAGE_SPEC}"
+              rollback_latest
+            else
+              echo "Unpublish failed. Falling back to npm deprecate."
+              npm deprecate "${PACKAGE_SPEC}" "${MESSAGE}"
+              echo "Deprecated ${PACKAGE_SPEC}"
+              rollback_latest
+            fi
+          else
+            echo "${PACKAGE_SPEC} does not exist on npm. Nothing to revoke."
+            rollback_latest
+          fi

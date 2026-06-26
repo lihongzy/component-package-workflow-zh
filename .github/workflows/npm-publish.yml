@@ -1,0 +1,48 @@
+name: Publish npm package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Check package version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Tag version v$TAG_VERSION does not match package.json version $PACKAGE_VERSION"
+            exit 1
+          fi
+
+      - name: Syntax check
+        run: |
+          node --check bin/install.mjs
+          node --check scripts/check_component_name_exists.mjs
+          node --check subskills/html-template-to-react-components-zh/scripts/analyze_template_pair.mjs
+          node --check subskills/html-template-to-react-components-zh/scripts/validate_component_contract.mjs
+          node --check subskills/upload-aliyun-oss-zh/scripts/upload_dist_to_aliyun_oss.mjs
+
+      - name: Preview package contents
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
