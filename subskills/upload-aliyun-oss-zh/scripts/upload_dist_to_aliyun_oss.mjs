@@ -351,6 +351,7 @@ async function loadManifest(projectRoot) {
 	if (typeof manifest.name !== 'string' || !manifest.name.trim()) {
 		fail('src/manifest.json 的 name 必须是非空字符串');
 	}
+	validatePlatformComponentName(manifest.name.trim());
 	if (typeof manifest.description !== 'string' || !manifest.description.trim()) {
 		fail('src/manifest.json 的 description 必须是非空字符串');
 	}
@@ -363,6 +364,24 @@ async function loadManifest(projectRoot) {
 	validateManifestPropsForPlatform(manifest.props);
 
 	return manifest;
+}
+
+function validatePlatformComponentName(name) {
+	const parts = name.split('_');
+	if (parts.length < 3) {
+		fail(`src/manifest.json 的 name 必须使用 <中文场景或模板>_<中文组件名>_<english_component_code>，例如 会议总结_一句话看懂_meeting_minutes_summary：${name}`);
+	}
+	const englishCode = parts.at(-1);
+	const chineseParts = parts.slice(0, -1);
+	if (!englishCode || !/^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(englishCode)) {
+		fail(`src/manifest.json 的 name 最后一段 english_component_code 只能包含小写英文、数字和下划线：${name}`);
+	}
+	if (!chineseParts.every((part) => part.trim())) {
+		fail(`src/manifest.json 的 name 中文场景和中文组件名不能为空：${name}`);
+	}
+	if (!chineseParts.some((part) => /[\u4e00-\u9fff]/.test(part))) {
+		fail(`src/manifest.json 的 name 必须包含中文场景或中文组件名，不能只使用纯英文机器名：${name}`);
+	}
 }
 
 const DISALLOWED_PLATFORM_PROP_NAMES = new Set([
